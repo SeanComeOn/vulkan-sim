@@ -31,6 +31,7 @@ cuobjdump_to_ptxplus/sass_parser.cc
 cuobjdump_to_ptxplus/sass_parser.hh
 cuobjdump_to_ptxplus/sass_parser.output
 
+ubuntu2204_build/
 build/*
 tags
 *.swp

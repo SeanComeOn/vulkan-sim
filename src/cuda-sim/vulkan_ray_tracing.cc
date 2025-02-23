@@ -594,7 +594,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
             stack.pop_back();
         }
 
-        while (next_node_addr > 0)
+        while (next_node_addr != nullptr)
         {
             // TLAS offset
             device_offset = (uint64_t)tlas_addr - (uint64_t)_topLevelAS;
@@ -769,7 +769,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 
 
                 // traverse bottom level internal nodes
-                while (next_node_addr > 0)
+                while (next_node_addr != nullptr)
                 {
                     node_addr = next_node_addr;
                     next_node_addr = NULL;

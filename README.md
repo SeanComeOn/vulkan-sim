@@ -40,7 +40,6 @@ vulkan-sim-root/-|- vulkan-sim/
                  |- embree-3.13.4.x86_64.linux/ (Embree3 can be installed anywhere, change mesa/src/intel/vulkan meson.build to match)
 ```
 
-
 #  Vulkan-Sim Installation Instructions 
 Commands here assume you have navigated to `vulkan-sim-root/`. Make sure CUDA Toolkit and embree3 are installed.
 
@@ -53,6 +52,9 @@ sudo apt install vulkan-sdk
 ```
 
 2. Set environment variables
+
+https://github.com/RenderKit/embree/releases/download/v3.13.4/embree-3.13.4.x86_64.linux.tar.gz
+
 ``` bash
 # Change this to your CUDA install path
 export CUDA_INSTALL_PATH=/usr/local/cuda-11.7
@@ -60,7 +62,13 @@ export CUDA_INSTALL_PATH=/usr/local/cuda-11.7
 source embree-3.13.4.x86_64.linux/embree-vars.sh
 ```
 
-3. Build Vulkan-Sim + Mesa. Please ignore the error in the first `ninja -C build/ install`, this is normal.
+1. Build Vulkan-Sim + Mesa. Please ignore the error in the first `ninja -C build/ install`, this is normal.
+
+
+```shell
+sudo apt install python3-mako
+```
+
 ``` bash
 cd vulkan-sim/
 source setup_environment

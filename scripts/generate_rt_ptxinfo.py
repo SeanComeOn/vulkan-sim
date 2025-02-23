@@ -34,6 +34,7 @@
 import os
 import sys
 import subprocess
+import random
 
 inputfile = sys.argv[1]
 
@@ -70,9 +71,9 @@ for l in lines:
 
 unknown_symbols = list(set(unknown_symbols)) # removes duplicates
 
-#print("Parsed unknown symbols and ops.")
-#print(unknown_symbols)
-#print(unknown_op_name)
+print("Parsed unknown symbols and ops.")
+# print(unknown_symbols)
+print(unknown_op_name)
 #print(unknown_op_line)
 
 
@@ -94,9 +95,11 @@ for l in f.readlines():
             symbol_table[chunks[-1]] = chunks[-2]
             is_vec[chunks[-1]] = True
 
-#print("Created symbol table")
-#print(symbol_table)
+print("Created symbol table")
+print(symbol_table)
 #print(is_vec)
+initial_symbol_number = len(symbol_table)
+print("initial symbol number: ",initial_symbol_number)
 
 
 # Writing a fake ptx file for ptxas
@@ -228,13 +231,82 @@ for l in f.readlines():
 
 
     else:
-        #print(l)
-        tempoutput.write(l)
+        # check op. In NIR, different types can do math directly, while in PTX, we need to convert
+        segs = l.split("//")[0].replace(",", "").replace(";", "").split()
+        # print(segs)
+        if segs:
+            if(segs[0].split('.')[0] == "min"):
+                # get three operand and check their types
+                dest, src1, src2 = segs[1], segs[2], segs[3]
+                newsrcs = [None, None]
+                for i, src in enumerate([src1, src2]):
+                    # check type
+                    if symbol_table[src] != symbol_table[dest]:
+                        # different type, need to convert
+                        # new reg declaration
+                        new_convert_temp_reg_name = src + "_cvtr_frm_" + str(linenum)
+                        # check that the new reg is not already declared
+                        while new_convert_temp_reg_name in symbol_table:
+                            new_convert_temp_reg_name = new_convert_temp_reg_name + "_rnd_" + str(random.randint(0, 1000000))
+                        symbol_table[new_convert_temp_reg_name] = symbol_table[dest]
+                        is_vec[new_convert_temp_reg_name] = is_vec[dest]
+                        # add convertion line
+                        conversion_line = ".reg " + symbol_table[dest] + " " + new_convert_temp_reg_name + ";\n"
+                        tempoutput.write(conversion_line)
+                        if symbol_table[dest] == ".s32" and symbol_table[src] == ".f32":
+                            cmd = "cvt.rni"
+                        else:
+                            print("not implemented conversion of " + symbol_table[src] + " to " + symbol_table[dest])
+                        tempoutput.write(cmd + symbol_table[dest] + symbol_table[src] + " " + new_convert_temp_reg_name + ", " + src + ";\n")
+                        newsrcs[i] = new_convert_temp_reg_name
+                for i, src in enumerate(newsrcs):
+                    if src is not None:
+                        segs[i + 2] = src
+                editedline = segs[0] + " " + segs[1] + ', ' + segs[2] + ', ' + segs[3] + ';' + " //" + " ".join(l.split("//")[1:]) if(l.split("//")[1:]) else ""
+                tempoutput.write(editedline)
+                
+                # tempoutput.write(l)
+            elif(segs[0].split('.')[0] == "or"):
+                dest, src1, src2 = segs[1], segs[2], segs[3]
+                newsrcs = [None, None]
+                for i, src in enumerate([src1, src2]):
+                    # check type
+                    if symbol_table[src] != symbol_table[dest]:
+                        # different type, need to convert
+                        # new reg declaration
+                        new_convert_temp_reg_name = src + "_cvtr_frm_" + str(linenum)
+                        # check that the new reg is not already declared
+                        while new_convert_temp_reg_name in symbol_table:
+                            new_convert_temp_reg_name = new_convert_temp_reg_name + "_rnd_" + str(random.randint(0, 1000000))
+                        symbol_table[new_convert_temp_reg_name] = symbol_table[dest]
+                        is_vec[new_convert_temp_reg_name] = is_vec[dest]
+                        # add convertion line
+                        conversion_reg_line = ".reg " + symbol_table[dest] + " " + new_convert_temp_reg_name + ";\n"
+                        tempoutput.write(conversion_reg_line)
+                        if symbol_table[dest] == ".pred" and symbol_table[src] == ".b32":
+                            cmd = "setp.ne.b32 " + new_convert_temp_reg_name + ", " + src + ", 0;\n"
+                        else:
+                            print("not implemented conversion of " + symbol_table[src] + " to " + symbol_table[dest])
+                        tempoutput.write(cmd)
+                        newsrcs[i] = new_convert_temp_reg_name
+                for i, src in enumerate(newsrcs):
+                    if src is not None:
+                        segs[i + 2] = src
+                editedline = segs[0] + " " + segs[1] + ', ' + segs[2] + ', ' + segs[3] + ';' + " //" + " ".join(l.split("//")[1:]) if(l.split("//")[1:]) else ""
+                tempoutput.write(editedline)
+                
+                # tempoutput.write(l)
+            else:
+                tempoutput.write(l)
+        else:
+            # print(l)
+            tempoutput.write(l)
 
     if (l.find("/* preds: */") != -1):
         #print(".reg .f64 tempuse;")
         #tempoutput.write(".reg .f64 tempuse;\n")
 
+        # no unknown symbols
         for symbol in unknown_symbols:
             #print(".reg .v4 .f32 " + symbol + ";")
             tempoutput.write(".reg .v4 .f32 " + symbol + ";\n")
@@ -255,5 +327,5 @@ for l in lines:
     print(l)
     fout.writelines(l+"\n")
 
-os.system("rm -rf temp_ptxas_shader.ptx")
+# os.system("rm -rf temp_ptxas_shader.ptx")
 os.system("rm -rf elf.o")
