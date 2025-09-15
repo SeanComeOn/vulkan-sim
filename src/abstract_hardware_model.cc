@@ -38,6 +38,11 @@
 #include "cuda-sim/ptx_ir.h"
 #include "gpgpu-sim/gpu-sim.h"
 #include "gpgpusim_entrypoint.h"
+
+// Forward declaration to avoid full header inclusion
+namespace VulkanRayTracing {
+    void performGracefulExit(const char* reason = nullptr);
+}
 #include "option_parser.h"
 
 void mem_access_t::init(gpgpu_context *ctx) {
@@ -1336,7 +1341,8 @@ void kernel_info_t::destroy_cta_streams() {
 
   if ((get_uid() >= (m_max_simulated_kernels)) && (m_max_simulated_kernels != 0)) {
     printf("Max simulated kernels of %d has reached, exiting.\n", m_max_simulated_kernels);
-    exit(0);
+    // Perform graceful cleanup before exit
+    VulkanRayTracing::performGracefulExit("Maximum simulated kernels limit reached in kernel initialization");
   }
 }
 

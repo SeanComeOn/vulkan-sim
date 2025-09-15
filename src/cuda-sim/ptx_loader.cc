@@ -181,7 +181,13 @@ symbol_table *gpgpu_context::gpgpu_ptx_sim_load_ptx_from_string(
   int errors = ptx_parse(ptx_parser->scanner, ptx_parser);
   if (errors) {
     char fname[1024];
-    snprintf(fname, 1024, "_ptx_errors_XXXXXX");
+    // Add environment variable suffix to prevent multiprocess conflicts
+    const char* suffix = getenv("VK_SIM_TMP_SUFFIX");
+    if (suffix) {
+      snprintf(fname, 1024, "_ptx_errors_%s_XXXXXX", suffix);
+    } else {
+      snprintf(fname, 1024, "_ptx_errors_XXXXXX");
+    }
     int fd = mkstemp(fname);
     close(fd);
     printf(
@@ -210,8 +216,16 @@ symbol_table *gpgpu_context::gpgpu_ptx_sim_load_ptx_from_filename(
 }
 
 void fix_duplicate_errors(char fname2[1024]) {
-  char tempfile[1024] = "_temp_ptx";
+  char tempfile[1024];
   char commandline[1024];
+  
+  // Add environment variable suffix to prevent multiprocess conflicts
+  const char* suffix = getenv("VK_SIM_TMP_SUFFIX");
+  if (suffix) {
+    snprintf(tempfile, 1024, "_temp_ptx_%s", suffix);
+  } else {
+    snprintf(tempfile, 1024, "_temp_ptx");
+  }
 
   // change the name of the ptx file to _temp_ptx
   snprintf(commandline, 1024, "mv %s %s", fname2, tempfile);
@@ -397,7 +411,14 @@ void gpgpu_context::gpgpu_ptxinfo_load_from_string(const char *p_for_info,
       final_tempfile_ptxinfo[1024], tempfile_ptxinfo[1024];
   for (int index = 1; index <= no_of_ptx; index++) {
     snprintf(ptx_file, 1000, "%s.%d.sm_%u.ptx", name, index, sm_version);
-    snprintf(fname, 1024, "_ptx_XXXXXX");
+    
+    // Add environment variable suffix to prevent multiprocess conflicts
+    const char* suffix = getenv("VK_SIM_TMP_SUFFIX");
+    if (suffix) {
+      snprintf(fname, 1024, "_ptx_%s_XXXXXX", suffix);
+    } else {
+      snprintf(fname, 1024, "_ptx_XXXXXX");
+    }
     int fd = mkstemp(fname);
     close(fd);
 
@@ -409,7 +430,12 @@ void gpgpu_context::gpgpu_ptxinfo_load_from_string(const char *p_for_info,
       exit(0);
     }
 
-    snprintf(fname2, 1024, "_ptx2_XXXXXX");
+    // Add environment variable suffix to prevent multiprocess conflicts
+    if (suffix) {
+      snprintf(fname2, 1024, "_ptx2_%s_XXXXXX", suffix);
+    } else {
+      snprintf(fname2, 1024, "_ptx2_XXXXXX");
+    }
     fd = mkstemp(fname2);
     close(fd);
     char commandline2[4096];
@@ -490,7 +516,13 @@ void gpgpu_context::gpgpu_ptxinfo_load_from_string(const char *p_for_info,
   // TODO: duplicate code! move it into a function so that it can be reused!
   if (no_of_ptx == 0) {
     // For CDP, we dump everything. So no_of_ptx will be 0.
-    snprintf(fname, 1024, "_ptx_XXXXXX");
+    // Add environment variable suffix to prevent multiprocess conflicts
+    const char* suffix = getenv("VK_SIM_TMP_SUFFIX");
+    if (suffix) {
+      snprintf(fname, 1024, "_ptx_%s_XXXXXX", suffix);
+    } else {
+      snprintf(fname, 1024, "_ptx_XXXXXX");
+    }
     int fd = mkstemp(fname);
     close(fd);
 
@@ -500,7 +532,12 @@ void gpgpu_context::gpgpu_ptxinfo_load_from_string(const char *p_for_info,
     fprintf(ptxfile, "%s", p_for_info);
     fclose(ptxfile);
 
-    snprintf(fname2, 1024, "_ptx2_XXXXXX");
+    // Add environment variable suffix to prevent multiprocess conflicts
+    if (suffix) {
+      snprintf(fname2, 1024, "_ptx2_%s_XXXXXX", suffix);
+    } else {
+      snprintf(fname2, 1024, "_ptx2_XXXXXX");
+    }
     fd = mkstemp(fname2);
     close(fd);
     char commandline2[4096];

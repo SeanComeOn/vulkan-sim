@@ -256,6 +256,11 @@ private:
     static std::ofstream imageFile;
     static bool firstTime;
     static struct DESCRIPTOR_SET_STRUCT *descriptorSet;
+    
+    // Image buffer for storing ray tracing output
+    static unsigned char* imageBuffer;
+    static uint32_t imageWidth;
+    static uint32_t imageHeight;
 
     // For Launcher
     static void* launcher_descriptorSets[MAX_DESCRIPTOR_SETS][MAX_DESCRIPTOR_SET_BINDINGS];
@@ -326,6 +331,12 @@ public:
               float hitValue_X, float hitValue_Y, float hitValue_Z, float hitValue_W, const ptx_instruction *pI, ptx_thread_info *thread);
     static void getTexture(struct DESCRIPTOR_STRUCT *desc, float x, float y, float lod, float &c0, float &c1, float &c2, float &c3, std::vector<ImageMemoryTransactionRecord>& transactions, uint64_t launcher_offset = 0);
     static void image_load(struct DESCRIPTOR_STRUCT *desc, uint32_t x, uint32_t y, float &c0, float &c1, float &c2, float &c3);
+    
+    // Image buffer management for ray tracing output
+    static void initializeImageBuffer(uint32_t width, uint32_t height);
+    static void writeImageBufferToPPM();
+    static void cleanupImageBuffer();
+    static void performGracefulExit(const char* reason = nullptr);
 
     static void dump_descriptor_set(uint32_t setID, uint32_t descID, void *address, uint32_t size, VkDescriptorType type);
     static void dump_descriptor_set_for_AS(uint32_t setID, uint32_t descID, void *address, uint32_t desc_size, VkDescriptorType type, uint32_t backwards_range, uint32_t forward_range, bool split_files, VkAccelerationStructureKHR _topLevelAS);

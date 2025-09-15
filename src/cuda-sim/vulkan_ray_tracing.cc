@@ -34,6 +34,7 @@
 #include <string>
 #include <fstream>
 #include <cmath>
+#include <cstring>
 #define BOOST_FILESYSTEM_VERSION 3
 #define BOOST_FILESYSTEM_NO_DEPRECATED 
 #include <boost/filesystem.hpp>
@@ -107,6 +108,11 @@ std::ofstream VulkanRayTracing::imageFile;
 std::map<std::string, std::string> outputImages;
 bool VulkanRayTracing::firstTime = true;
 std::vector<shader_stage_info> VulkanRayTracing::shaders;
+
+// Image buffer for storing ray tracing output
+unsigned char* VulkanRayTracing::imageBuffer = nullptr;
+uint32_t VulkanRayTracing::imageWidth = 0;
+uint32_t VulkanRayTracing::imageHeight = 0;
 // RayDebugGPUData VulkanRayTracing::rayDebugGPUData[2000][2000] = {0};
 struct DESCRIPTOR_SET_STRUCT* VulkanRayTracing::descriptorSet = NULL;
 void* VulkanRayTracing::launcher_descriptorSets[MAX_DESCRIPTOR_SETS][MAX_DESCRIPTOR_SET_BINDINGS] = {NULL};
@@ -1592,20 +1598,44 @@ void VulkanRayTracing::vkCmdTraceRaysKHR(
     }
 
     printf("gpgpusim: tlas address %p\n", tlas_addr);
-            
+    
+    // Initialize image buffer before launching kernel
+    if (writeImageBinary) {
+        initializeImageBuffer(launch_width, launch_height);
+        printf("gpgpusim: Initialized image buffer (%d x %d)\n", launch_width, launch_height);
+    }
+    
     struct CUstream_st *stream = 0;
     stream_operation op(grid, ctx->func_sim->g_ptx_sim_mode, stream);
+    printf("gpgpusim: Pushing operation to stream manager...\n");
     ctx->the_gpgpusim->g_stream_manager->push(op);
+    // nothing executes afterwards.
+    
+    printf("gpgpusim: Operation pushed, now waiting for completion...\n");
 
     //printf("%d\n", descriptors[0][1].address);
 
     fflush(stdout);
 
     while(!op.is_done() && !op.get_kernel()->done()) {
-        printf("waiting for op to finish\n");
+        printf("gpgpusim: waiting for op to finish (op.is_done()=%d, kernel.done()=%d)\n", 
+               op.is_done(), op.get_kernel()->done());
         sleep(1);
         continue;
     }
+    printf("gpgpusim: Operation completed (op.is_done()=%d, kernel.done()=%d)\n", 
+           op.is_done(), op.get_kernel()->done());
+    std::cout << "gpgpusim: Ray tracing operation completed." << std::endl;
+    
+    // Ray tracing operation completed - write image buffer to PPM
+    if (imageBuffer) {
+        printf("gpgpusim: Ray tracing completed, writing image to PPM...\n");
+        writeImageBufferToPPM();
+        cleanupImageBuffer();
+    } else {
+        printf("gpgpusim: Warning - image buffer is null, cannot write PPM\n");
+    }
+    
     // for (unsigned i = 0; i < entry->num_args(); i++) {
     //     std::pair<size_t, unsigned> p = entry->get_param_config(i);
     //     cudaSetupArgumentInternal(args[i], p.first, p.second);
@@ -2124,7 +2154,8 @@ void VulkanRayTracing::image_store(struct DESCRIPTOR_STRUCT* desc, uint32_t gl_L
 
     if(writeImageBinary && vk_format != VK_FORMAT_R32G32B32A32_SFLOAT)
     {
-        uint32_t image_width = thread->get_kernel().vulkan_metadata.launch_width;
+        // Legacy file writing (commented out for now)
+        /*
         uint32_t offset = 0;
         offset += gl_LaunchIDEXT_Y * image_width;
         offset += gl_LaunchIDEXT_X;
@@ -2137,6 +2168,7 @@ void VulkanRayTracing::image_store(struct DESCRIPTOR_STRUCT* desc, uint32_t gl_L
         imageFile.write((char*) data, 3 * sizeof(float));
         imageFile.write((char*) (&offset), sizeof(uint32_t));
         imageFile.flush();
+        */
 
         // imageFile << "(" << gl_LaunchIDEXT_X << ", " << gl_LaunchIDEXT_Y << ") : (";
         // imageFile << hitValue_X << ", " << hitValue_Y << ", " << hitValue_Z << ", " << hitValue_W << ")\n";
@@ -2174,10 +2206,26 @@ void VulkanRayTracing::image_store(struct DESCRIPTOR_STRUCT* desc, uint32_t gl_L
     uint32_t height = image->vk.extent.height;
 
     if (writeImageBinary) {
+        // Use image buffer for writing
+        if (imageBuffer && gl_LaunchIDEXT_X < imageWidth && gl_LaunchIDEXT_Y < imageHeight) {
+            uint32_t pixelIndex = (gl_LaunchIDEXT_Y * imageWidth + gl_LaunchIDEXT_X) * 3;
+            
+            // Convert float values [0.0, 1.0] to unsigned char [0, 255]
+            imageBuffer[pixelIndex + 0] = (unsigned char)(hitValue_X * 255.0f);  // R
+            imageBuffer[pixelIndex + 1] = (unsigned char)(hitValue_Y * 255.0f);  // G
+            imageBuffer[pixelIndex + 2] = (unsigned char)(hitValue_Z * 255.0f);  // B
+        }
+        
+        // Legacy fseek-based file writing (commented out)
+        /*
         // TODO: fix the bottom, is NULL
         // assert(image->vk.base.object_name);
         // std::string img_name(image->vk.base.object_name);
-        std::string img_name("SCENE");
+        std::string img_name;
+        if(getenv("VULKAN_SCENE_NAME"))
+            img_name = std::string(getenv("VULKAN_SCENE_NAME"));
+        else
+            img_name = "SCENE";
 
         if (outputImages.find(img_name) == outputImages.end()) {
             std::time_t raw_time = std::time(0);
@@ -2204,6 +2252,7 @@ void VulkanRayTracing::image_store(struct DESCRIPTOR_STRUCT* desc, uint32_t gl_L
         fseeko(img_bin, header_offset + value_offset, SEEK_SET);
         fprintf(img_bin, "%3.0f %3.0f %3.0f\n", 
                 hitValue_X * 255, hitValue_Y * 255, hitValue_Z * 255);
+        */
     }
 
     // Setup transaction record for timing model
@@ -2267,6 +2316,163 @@ void VulkanRayTracing::image_store(struct DESCRIPTOR_STRUCT* desc, uint32_t gl_L
 #endif
 }
 
+// Simple image buffer management for individual process
+void VulkanRayTracing::initializeImageBuffer(uint32_t width, uint32_t height) {
+    printf("gpgpusim: initializeImageBuffer called with %ux%u, current buffer=%p\n", 
+           width, height, imageBuffer);
+    
+    if (!imageBuffer) {
+        printf("gpgpusim: Allocating new image buffer...\n");
+        imageWidth = width;
+        imageHeight = height;
+        
+        // Allocate buffer for RGB values (3 bytes per pixel)
+        uint32_t bufferSize = width * height * 3;
+        imageBuffer = new unsigned char[bufferSize];
+        
+        // Initialize with black color
+        memset(imageBuffer, 0, bufferSize);
+        
+        printf("gpgpusim: Initialized image buffer (%ux%u, %u bytes) at %p\n", 
+               width, height, bufferSize, imageBuffer);
+    } else {
+        // Check if dimensions match existing buffer
+        if (imageWidth != width || imageHeight != height) {
+            printf("gpgpusim: WARNING: Buffer dimension mismatch! Current:(%ux%u) Requested:(%ux%u)\n",
+                   imageWidth, imageHeight, width, height);
+            printf("gpgpusim: Reallocating buffer with new dimensions...\n");
+            
+            // Clean up old buffer
+            delete[] imageBuffer;
+            
+            // Allocate new buffer
+            imageWidth = width;
+            imageHeight = height;
+            uint32_t bufferSize = width * height * 3;
+            imageBuffer = new unsigned char[bufferSize];
+            memset(imageBuffer, 0, bufferSize);
+            
+            printf("gpgpusim: Reallocated buffer (%ux%u, %u bytes) at %p\n", 
+                   width, height, bufferSize, imageBuffer);
+        } else {
+            printf("gpgpusim: Image buffer already initialized (%ux%u) at %p\n", 
+                   imageWidth, imageHeight, imageBuffer);
+        }
+    }
+}
+
+void VulkanRayTracing::writeImageBufferToPPM() {
+    if (!imageBuffer) {
+        printf("gpgpusim: Warning - image buffer not initialized\n");
+        return;
+    }
+    
+    // Use the same file naming logic as the original LVPIPE implementation
+    std::string img_name;
+    if(getenv("VULKAN_SCENE_NAME"))
+        img_name = std::string(getenv("VULKAN_SCENE_NAME"));
+    else
+        img_name = "SCENE";
+    
+    std::string fileName;
+    if (outputImages.find(img_name) == outputImages.end()) {
+        std::time_t raw_time = std::time(0);
+        struct tm *time_info;
+        char time_buf[30];
+
+        time_info = localtime(&raw_time);
+
+        strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S-", time_info);
+
+        std::string time_offset(time_buf);
+        std::string new_img_file_name = time_offset + img_name;
+
+        outputImages[img_name] = new_img_file_name + ".ppm";
+        fileName = outputImages[img_name];
+        printf("gpgpusim: saving image %s to file %s\n", img_name.c_str(), fileName.c_str());
+    } else {
+        fileName = outputImages[img_name];
+    }
+    
+    FILE* ppmFile = fopen(fileName.c_str(), "w");
+    if (!ppmFile) {
+        printf("gpgpusim: Error - cannot open PPM file %s for writing\n", fileName.c_str());
+        return;
+    }
+    
+    // Write PPM P3 header
+    fprintf(ppmFile, "P3\n%u %u\n255\n", imageWidth, imageHeight);
+    
+    // Write pixel data as raw unsigned char values in text format
+    for (uint32_t y = 0; y < imageHeight; y++) {
+        for (uint32_t x = 0; x < imageWidth; x++) {
+            uint32_t pixelIndex = (y * imageWidth + x) * 3;
+            
+            // Add bounds checking to prevent buffer overflow
+            uint32_t bufferSize = imageWidth * imageHeight * 3;
+            if (pixelIndex + 2 >= bufferSize) {
+                printf("gpgpusim: ERROR: Buffer overflow at pixel (%u,%u), index %u >= %u\n", 
+                       x, y, pixelIndex + 2, bufferSize);
+                fclose(ppmFile);
+                return;
+            }
+            
+            unsigned char r = imageBuffer[pixelIndex + 0];
+            unsigned char g = imageBuffer[pixelIndex + 1];
+            unsigned char b = imageBuffer[pixelIndex + 2];
+            
+            fprintf(ppmFile, "%3u %3u %3u", (unsigned int)r, (unsigned int)g, (unsigned int)b);
+            
+            // Add newline after each pixel for readability
+            if (x < imageWidth - 1) {
+                fprintf(ppmFile, " ");
+            } else {
+                fprintf(ppmFile, "\n");
+            }
+        }
+    }
+    
+    fclose(ppmFile);
+    
+    printf("gpgpusim: Successfully wrote image buffer to %s (%ux%u)\n", 
+           fileName.c_str(), imageWidth, imageHeight);
+}
+
+void VulkanRayTracing::cleanupImageBuffer() {
+    if (imageBuffer) {
+        printf("gpgpusim: Cleaning up image buffer at %p\n", imageBuffer);
+        delete[] imageBuffer;
+        imageBuffer = nullptr;
+    }
+    imageWidth = 0;
+    imageHeight = 0;
+    
+    printf("gpgpusim: Cleaned up image buffer\n");
+}
+
+void VulkanRayTracing::performGracefulExit(const char* reason) {
+    printf("gpgpusim: Performing graceful exit cleanup...\n");
+    if (reason) {
+        printf("gpgpusim: Exit reason: %s\n", reason);
+    }
+    
+    // Ensure any pending image data is written to file
+    if (imageBuffer) {
+        printf("gpgpusim: Writing image buffer to PPM before exit...\n");
+        writeImageBufferToPPM();
+        cleanupImageBuffer();
+    } else {
+        printf("gpgpusim: No image buffer to write\n");
+    }
+    
+    // Flush all output streams to ensure logs are written
+    fflush(stdout);
+    fflush(stderr);
+    
+    printf("gpgpusim: Graceful exit cleanup completed\n");
+    exit(0);
+}
+
 // variable_decleration_entry* VulkanRayTracing::get_variable_decleration_entry(std::string name, ptx_thread_info *thread)
 // {
 //     std::vector<variable_decleration_entry>& table = thread->RT_thread_data->variable_decleration_table;
@@ -2318,7 +2524,16 @@ void VulkanRayTracing::dumpTextures(struct DESCRIPTOR_STRUCT *desc, uint32_t set
     // Data to dump
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    
+    // Get temp file suffix for multiprocess safety
+    char *tmp_suffix = getenv("VK_SIM_TMP_SUFFIX");
+    char filePath[256];
+    if (tmp_suffix && strlen(tmp_suffix) > 0) {
+        snprintf(filePath, sizeof(filePath), "gpgpusimShaders_%s/", tmp_suffix);
+    } else {
+        strcpy(filePath, "gpgpusimShaders/");
+    }
+    
     char *extension = ".vkdescrptorsettexturedata";
 
     int VkDescriptorTypeNum;
@@ -2402,7 +2617,16 @@ void VulkanRayTracing::dumpStorageImage(struct DESCRIPTOR_STRUCT *desc, uint32_t
     // Dump storage image metadata
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    
+    // Get temp file suffix for multiprocess safety
+    char *tmp_suffix = getenv("VK_SIM_TMP_SUFFIX");
+    char filePath[256];
+    if (tmp_suffix && strlen(tmp_suffix) > 0) {
+        snprintf(filePath, sizeof(filePath), "gpgpusimShaders_%s/", tmp_suffix);
+    } else {
+        strcpy(filePath, "gpgpusimShaders/");
+    }
+    
     char *extension = ".vkdescrptorsetdata";
 
     int VkDescriptorTypeNum = 3;
@@ -2434,7 +2658,16 @@ void VulkanRayTracing::dump_descriptor_set_for_AS(uint32_t setID, uint32_t descI
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    
+    // Get temp file suffix for multiprocess safety
+    char *tmp_suffix = getenv("VK_SIM_TMP_SUFFIX");
+    char filePath[256];
+    if (tmp_suffix && strlen(tmp_suffix) > 0) {
+        snprintf(filePath, sizeof(filePath), "gpgpusimShaders_%s/", tmp_suffix);
+    } else {
+        strcpy(filePath, "gpgpusimShaders/");
+    }
+    
     char *extension = ".vkdescrptorsetdata";
 
     int VkDescriptorTypeNum;
@@ -2540,7 +2773,16 @@ void VulkanRayTracing::dump_descriptor_set(uint32_t setID, uint32_t descID, void
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    
+    // Get temp file suffix for multiprocess safety
+    char *tmp_suffix = getenv("VK_SIM_TMP_SUFFIX");
+    char filePath[256];
+    if (tmp_suffix && strlen(tmp_suffix) > 0) {
+        snprintf(filePath, sizeof(filePath), "gpgpusimShaders_%s/", tmp_suffix);
+    } else {
+        strcpy(filePath, "gpgpusimShaders/");
+    }
+    
     char *extension = ".vkdescrptorsetdata";
 
     int VkDescriptorTypeNum;
@@ -2747,7 +2989,15 @@ void VulkanRayTracing::dump_callparams_and_sbt(void *raygen_sbt, void *miss_sbt,
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    
+    // Get temp file suffix for multiprocess safety
+    char *tmp_suffix = getenv("VK_SIM_TMP_SUFFIX");
+    char filePath[256];
+    if (tmp_suffix && strlen(tmp_suffix) > 0) {
+        snprintf(filePath, sizeof(filePath), "gpgpusimShaders_%s/", tmp_suffix);
+    } else {
+        strcpy(filePath, "gpgpusimShaders/");
+    }
 
     char call_params_filename [200];
     int trace_rays_call_count = 0; // just a placeholder for now

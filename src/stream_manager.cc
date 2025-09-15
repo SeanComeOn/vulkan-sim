@@ -32,6 +32,11 @@
 #include "gpgpu-sim/gpu-sim.h"
 #include "gpgpusim_entrypoint.h"
 
+// Forward declaration to avoid full header inclusion
+namespace VulkanRayTracing {
+    void performGracefulExit(const char* reason = nullptr);
+}
+
 unsigned CUstream_st::sm_next_stream_uid = 0;
 
 CUstream_st::CUstream_st() {
@@ -148,7 +153,8 @@ bool stream_operation::do_operation(gpgpu_sim *gpu) {
     case stream_kernel_launch:
       if ((m_kernel->get_uid() > (m_kernel->m_max_simulated_kernels)) && (m_kernel->m_max_simulated_kernels != 0)) {
         printf("Max simulated kernels of %d has reached, exiting.\n", m_kernel->m_max_simulated_kernels);
-        exit(0);
+        // Perform graceful cleanup before exit
+        VulkanRayTracing::performGracefulExit("Maximum simulated kernels limit reached");
       }
       if (m_sim_mode) {  // Functional Sim
         if (g_debug_execution >= 3) {

@@ -4100,7 +4100,7 @@ void gpgpu_sim::shader_print_scheduler_stat(FILE *fout,
   } else {
     snprintf(name_buff, STR_SIZE - 1, "warp_id");
   }
-  fprintf(fout, "Shader %d %s issue ditsribution:\n", scheduler_sampling_core,
+  fprintf(fout, "Shader %d %s issue distribution:\n", scheduler_sampling_core,
           name_buff);
   const unsigned num_warp_ids = distro.size();
   // First print out the warp ids

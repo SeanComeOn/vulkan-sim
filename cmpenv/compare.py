@@ -1,3 +1,4 @@
+import os
 def read_env_file(filepath):
     env_vars = {}
     with open(filepath, 'r') as file:
@@ -18,9 +19,12 @@ def main():
     file1 = 'org.sh'
     file2 = 'later.sh'
 
+    # print current directory
+    print("Current directory:", os.getcwd())
+
     new_vars = compare_env_files(file1, file2)
 
-    with open('new_vars.sh', 'w') as file:
+    with open('new_vars.sh', 'w') as file:  # 'w' mode overwrites if file exists
         for key, value in new_vars.items():
             file.write(f'{key}={value}\n')
 

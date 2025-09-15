@@ -77,9 +77,16 @@ print(unknown_op_name)
 #print(unknown_op_line)
 
 
+# Get temp file suffix for multiprocess safety
+import os
+tmp_suffix = os.getenv("VK_SIM_TMP_SUFFIX")
+if tmp_suffix:
+    temp_ptx_filename = f"temp_ptxas_shader_{tmp_suffix}.ptx"
+else:
+    temp_ptx_filename = "temp_ptxas_shader.ptx"
 
 f = open(inputfile, 'r')
-tempoutput = open("temp_ptxas_shader.ptx", 'w')
+tempoutput = open(temp_ptx_filename, 'w')
 
 # Create the symbol table
 symbol_table = {}
@@ -320,12 +327,12 @@ tempoutput.close()
 
 # Run PTXAS on the tempoutput and get ptxinfo then delete the tempoutput
 fout = open(inputfile+"info", 'w')
-proc = subprocess.Popen(["ptxas -v -m 32 " + "temp_ptxas_shader.ptx"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+proc = subprocess.Popen(["ptxas -v -m 32 " + temp_ptx_filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
 stdout, stderr = proc.communicate()
 lines = str(stderr, 'utf-8').splitlines()
 for l in lines:
     print(l)
     fout.writelines(l+"\n")
 
-# os.system("rm -rf temp_ptxas_shader.ptx")
+# os.system("rm -rf " + temp_ptx_filename)
 os.system("rm -rf elf.o")
