@@ -28,6 +28,7 @@
 
 #include "vulkan_ray_tracing.h"
 #include "vulkan_rt_thread_data.h"
+#include "ray_intersection_stats.h"
 
 #include <iostream>
 #include <vector>
@@ -222,6 +223,9 @@ float3 calculate_idir(float3 direction) {
 
 bool ray_box_test(float3 low, float3 high, float3 idirection, float3 origin, float tmin, float tmax, float& thit)
 {
+    // 统计Ray-Box测试
+    RAY_STATS_INCREMENT_BOX_TEST();
+    
 	// const float3 lo = Low * InvDir - Ood;
 	// const float3 hi = High * InvDir - Ood;
     float3 lo = get_t_bound(low, origin, idirection);
@@ -239,7 +243,16 @@ bool ray_box_test(float3 low, float3 high, float3 idirection, float3 origin, flo
     thit = min;
 
 	// return slabMin <= slabMax;
-    return (min <= max);
+    bool hit = (min <= max);
+    
+    // 统计Ray-Box结果
+    if (hit) {
+        RAY_STATS_INCREMENT_BOX_HIT();
+    } else {
+        RAY_STATS_INCREMENT_BOX_MISS();
+    }
+    
+    return hit;
 }
 
 typedef struct StackEntry {
@@ -376,6 +389,9 @@ void VulkanRayTracing::init(uint32_t launch_width, uint32_t launch_height)
         return;
     _init_ = true;
 
+    // 初始化光线相交统计系统
+    init_ray_intersection_stats();
+
     gpgpu_context *ctx;
     ctx = GPGPU_Context();
     CUctx_st *context = GPGPUSim_Context(ctx);
@@ -439,6 +455,9 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                    const ptx_instruction *pI,
                    ptx_thread_info *thread)
 {
+    // 统计光线追踪
+    RAY_STATS_INCREMENT_RAY_TRACED();
+    
     // printf("## calling trceRay function. rayFlags = %d, cullMask = %d, sbtRecordOffset = %d, sbtRecordStride = %d, missIndex = %d, origin = (%f, %f, %f), Tmin = %f, direction = (%f, %f, %f), Tmax = %f, payload = %d\n",
     //         rayFlags, cullMask, sbtRecordOffset, sbtRecordStride, missIndex, origin.x, origin.y, origin.z, Tmin, direction.x, direction.y, direction.z, Tmax, payload);
 
@@ -602,6 +621,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
         while (next_node_addr != nullptr)
         {
+            // 统计BVH节点访问
+            RAY_STATS_INCREMENT_BVH_NODE_VISITED();
+            RAY_STATS_INCREMENT_INNER_NODE_VISITED();
+            
             // TLAS offset
             device_offset = (uint64_t)tlas_addr - (uint64_t)_topLevelAS;
 
@@ -700,6 +723,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
         // traverse top level leaf nodes
         while (!stack.empty() && stack.back().leaf)
         {
+            // 统计叶子节点访问
+            RAY_STATS_INCREMENT_BVH_NODE_VISITED();
+            RAY_STATS_INCREMENT_LEAF_NODE_VISITED();
+            
             // TLAS offset
             device_offset = (uint64_t)tlas_addr - (uint64_t)_topLevelAS;
 
@@ -777,6 +804,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 // traverse bottom level internal nodes
                 while (next_node_addr != nullptr)
                 {
+                    // 统计底层BVH内部节点访问
+                    RAY_STATS_INCREMENT_BVH_NODE_VISITED();
+                    RAY_STATS_INCREMENT_INNER_NODE_VISITED();
+                    
                     node_addr = next_node_addr;
                     next_node_addr = NULL;
 
@@ -875,6 +906,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 // traverse bottom level leaf nodes
                 while(!stack.empty() && !stack.back().topLevel && stack.back().leaf)
                 {
+                    // 统计底层叶子节点访问
+                    RAY_STATS_INCREMENT_BVH_NODE_VISITED();
+                    RAY_STATS_INCREMENT_LEAF_NODE_VISITED();
+                    
                     uint8_t* leaf_addr = stack.back().addr;
                     stack.pop_back();
                     struct GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR leaf_descriptor;
@@ -1060,6 +1095,9 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
     if (min_thit < ray.dir_tmax.w)
     {
+        // 统计光线命中
+        RAY_STATS_INCREMENT_RAY_HIT();
+        
         traversal_data.hit_geometry = true;
         ctx->func_sim->g_rt_num_hits++;
         traversal_data.closest_hit.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
@@ -1096,11 +1134,15 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
     {
         VSIM_DPRINTF("gpgpusim: Ray hit procedural geometry; requires intersection shader.\n");
         traversal_data.hit_geometry = false;
+        // 统计光线未命中 (需要intersection shader的情况)
+        RAY_STATS_INCREMENT_RAY_MISS();
     }
     else
     {
         VSIM_DPRINTF("gpgpusim: Ray [%d] missed.\n", thread->get_uid());
         traversal_data.hit_geometry = false;
+        // 统计光线完全未命中
+        RAY_STATS_INCREMENT_RAY_MISS();
     }
 
     memory_space *mem = thread->get_global_memory();
@@ -1150,6 +1192,9 @@ void VulkanRayTracing::endTraceRay(const ptx_instruction *pI, ptx_thread_info *t
 
 bool VulkanRayTracing::mt_ray_triangle_test(float3 p0, float3 p1, float3 p2, Ray ray_properties, float* thit)
 {
+    // 统计Ray-Triangle测试
+    RAY_STATS_INCREMENT_TRIANGLE_TEST();
+    
     // Moller Trumbore algorithm (from scratchapixel.com)
     float3 v0v1 = p1 - p0;
     float3 v0v2 = p2 - p0;
@@ -1161,14 +1206,25 @@ bool VulkanRayTracing::mt_ray_triangle_test(float3 p0, float3 p1, float3 p2, Ray
     float3 tvec = ray_properties.get_origin() - p0;
     float u = dot(tvec, pvec) * idet;
 
-    if (u < 0 || u > 1) return false;
+    if (u < 0 || u > 1) {
+        // 统计Ray-Triangle未命中
+        RAY_STATS_INCREMENT_TRIANGLE_MISS();
+        return false;
+    }
 
     float3 qvec = cross(tvec, v0v1);
     float v = dot(ray_properties.get_direction(), qvec) * idet;
 
-    if (v < 0 || (u + v) > 1) return false;
+    if (v < 0 || (u + v) > 1) {
+        // 统计Ray-Triangle未命中
+        RAY_STATS_INCREMENT_TRIANGLE_MISS();
+        return false;
+    }
 
     *thit = dot(v0v2, qvec) * idet;
+    
+    // 统计Ray-Triangle命中
+    RAY_STATS_INCREMENT_TRIANGLE_HIT();
     return true;
 }
 
@@ -1391,6 +1447,8 @@ uint32_t VulkanRayTracing::registerShaders(char * shaderPath, gl_shader_stage sh
     if (result != 0) {
         printf("GPGPU-Sim PTX: ERROR ** while loading PTX (b) %d\n", result);
         printf("               Ensure ptxas is in your path.\n");
+        // 在错误退出前清理光线相交统计系统
+        cleanup_ray_intersection_stats();
         exit(1);
     }
     
@@ -2455,6 +2513,9 @@ void VulkanRayTracing::performGracefulExit(const char* reason) {
     if (reason) {
         printf("gpgpusim: Exit reason: %s\n", reason);
     }
+    
+    // 清理光线相交统计系统
+    cleanup_ray_intersection_stats();
     
     // Ensure any pending image data is written to file
     if (imageBuffer) {
